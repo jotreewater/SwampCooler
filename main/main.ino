@@ -5,16 +5,18 @@
 #include <DS3231.h>
 #include <LiquidCrystal.h>
 #include <dht_nonblocking.h>
+#include <Servo.h>
 #define DHT_SENSOR_TYPE DHT_TYPE_11
 
 static const int DHT_SENSOR_PIN = 3;
 DHT_nonblocking dht_sensor( DHT_SENSOR_PIN, DHT_SENSOR_TYPE );
 
+Servo myservo;
+
 DS3231 clock;
 RTCDateTime dt;
 
-int temp = 69;
-int tempRange = 50;
+int tempRange = 21;
 int waterRange = 10;
 
 int yellow = 13;
@@ -29,13 +31,18 @@ int lcd4 = 6;
 int lcd5 = 5;
 int lcd6 = 4;
 
-int button = A0;
+int disableButton = A0;
 int water = A1;
 
 float temperature;
 float humidity;
 
-int debug = 0;
+int ventButton = A2;
+int ventState = 0;
+
+int fan = 22;
+int fanState = 0;
+
 
 //                 BS    E     D4    D5    D6    D7
 LiquidCrystal lcd(lcd6, lcd5, lcd4, lcd3, lcd2, lcd1);
@@ -46,7 +53,8 @@ void setup()
   pinMode(yellow, OUTPUT);
   pinMode(green, OUTPUT);
   pinMode(red, OUTPUT);
-  pinMode(button, INPUT);
+  pinMode(fan, OUTPUT);
+  pinMode(disableButton, INPUT);
   pinMode(water, INPUT);
   // Initialize DS3231
   Serial.println("Initialize DS3231");
@@ -58,7 +66,8 @@ void setup()
   LiquidCrystal lcd(7, 8, 9, 10, 11,12);
   lcd.begin(16, 2);
   lcd.print("Hello, World!");
-  
+  myservo.attach(2);
+  myservo.write(90);
 }
 
 void loop() 
@@ -67,15 +76,57 @@ void loop()
   disabledState();
   idleState();
   runningState();
+  toggleVent();
 }
-int checkButton(){
-  static unsigned long measurement_timestamp = millis( );
-  int press = analogRead(button);
+int checkDisableButton(){
+  static unsigned long timerStart = millis( );
+  int disable = analogRead(disableButton);
   //wait 1 second
-  if( millis( ) - measurement_timestamp > 1000ul ){
-    measurement_timestamp = millis( );
+  if( millis( ) - timerStart > 1000ul ){
+    timerStart = millis( );
     //Serial.println(press);
-    if(press>1000){
+    if(disable>1000){
+      return 1;
+    }
+    else{
+      return 0;
+    }
+  }
+}
+void toggleFan(){
+  if((fanState == 0) && (temperature >= tempRange)){
+    Serial.println("Fan High");
+    digitalWrite(fan , HIGH);
+    fanState = 1;
+    return;
+  }
+  if(checkLevel()==1){
+    Serial.println("Fan Low");
+    digitalWrite(fan , LOW);
+    fanState = 0;
+    return;
+  }
+  if(checkDisableButton()==1){
+    Serial.println("Fan Low");
+    digitalWrite(fan , LOW);
+    fanState = 0;
+    return;
+  }
+  if((temperature < tempRange)){
+    Serial.println("Fan Low");
+    digitalWrite(fan , LOW);
+    fanState = 0;
+    return;
+  }
+}
+int checkVentButton(){
+  static unsigned long timerStart = millis( );
+  int vent = analogRead(ventButton);
+  //wait 1 second
+  if( millis( ) - timerStart > 500ul ){
+    timerStart = millis( );
+    //Serial.println(press);
+    if(vent>700){
       return 1;
     }
     else{
@@ -94,6 +145,47 @@ int checkLevel(){
     return 0;
   }
 }
+bool checkTemp( float *temperature, float *humidity )
+{
+  static unsigned long timerStart = millis( );
+  /* Checks for new reading every 3 seconds. */
+  if( millis( ) - timerStart > 3000ul ){
+    if( dht_sensor.measure( temperature, humidity ) == true )
+    {
+      timerStart = millis( );
+      return( true );
+    }
+  }
+  return( false );
+}
+void toggleVent(){
+  if((checkVentButton() && !(checkVentButton())) == 1){
+    Serial.println("Toggled Vent");
+    displayTime();
+    if(ventState == 1){
+      Serial.println("Vent Down");
+      myservo.write(90);
+      static unsigned long timerStart = millis( );
+      //wait 3 seconds
+      if( millis( ) - timerStart > 5000ul ){
+        timerStart = millis( );
+      }
+      ventState = 0;
+      return;
+    }
+    if(ventState == 0){
+      Serial.println("Vent Up");
+      myservo.write(180);
+      static unsigned long timerStart = millis( );
+      //wait 3 seconds
+      if( millis( ) - timerStart > 5000ul ){
+        timerStart = millis( );
+      }
+      ventState = 1;
+      return;
+    }
+  }
+}
 void displayTime(){
     dt = clock.getDateTime();
     Serial.print(dt.year);   Serial.print("-");
@@ -104,7 +196,8 @@ void displayTime(){
     Serial.print(dt.second); Serial.println("");
 }
 void disabledState(){
-  if(checkButton() == 1){
+  if(checkDisableButton() == 1){
+    toggleFan();
     Serial.println("Disabled");
     lcd.setCursor(0, 0);
     lcd.print("Disabled        ");
@@ -112,11 +205,16 @@ void disabledState(){
     digitalWrite(green, LOW);
     digitalWrite(blue, LOW);
     digitalWrite(yellow, HIGH);
-    while(checkButton() == 1); //checks if button is still pressed
-    while(checkButton() == 0); //checks if button was unpressed
-    while(checkButton() == 1); //checks if button is pressed again
+    while(checkDisableButton() == 1){//checks if button is still pressed
+    }
+    while(checkDisableButton() == 0){//checks if button was unpressed
+      toggleVent(); 
+    }
+    while(checkDisableButton() == 1){ //checks if button is pressed again
+      toggleVent(); 
+    }
     digitalWrite(yellow, LOW);
-    if(temp < tempRange){
+    if(temperature < tempRange){
       Serial.println("Idle");
       displayTime();
       lcd.setCursor(0, 0);
@@ -131,20 +229,17 @@ void disabledState(){
   }
 }
 void idleState(){
-  if(temp < tempRange){
+  if(temperature < tempRange){
+    toggleFan();
     Serial.println("Idle");
     lcd.setCursor(0, 0);
     lcd.print("Idle            ");
     displayTime();
     digitalWrite(green, HIGH);
     digitalWrite(blue, LOW);
-    while(temp < tempRange){
+    while(temperature < tempRange){
       digitalWrite(green, HIGH);
-      if(Serial.available()> 0){
-        temp = Serial.read();
-        Serial.println(temp);
-      }
-      if( measure_environment( &temperature, &humidity ) == true ){
+      if( checkTemp( &temperature, &humidity ) == true ){
         Serial.print( "T = " );
         Serial.print( temperature, 1 );
         Serial.print( " deg. C, H = " );
@@ -153,9 +248,9 @@ void idleState(){
         lcd.setCursor(0, 0);
         lcd.print("Temp=           ");
         lcd.setCursor(5, 0);
-        lcd.print(temperature);
+        lcd.print((temperature * 9/5)+32);
         lcd.setCursor(7, 0);
-        lcd.print("C       ");
+        lcd.print("F       ");
         lcd.setCursor(9, 0);
         lcd.print("Hum=  ");
         lcd.setCursor(13, 0);
@@ -163,6 +258,7 @@ void idleState(){
         lcd.setCursor(15, 0);
         lcd.print("%");
       }
+      toggleVent();
       disabledState();
       errorState();
       runningState();
@@ -171,6 +267,11 @@ void idleState(){
 }
 void errorState(){
   if(checkLevel()==1){
+    toggleFan();
+    static unsigned long timerStart = millis( );
+    if( millis( ) - timerStart > 5000ul ){
+        timerStart = millis( );
+      }
     Serial.println("Error");
     lcd.setCursor(0, 0);
     lcd.print("Error: Water Low");
@@ -178,9 +279,11 @@ void errorState(){
     digitalWrite(green, LOW);
     digitalWrite(blue, LOW);
     digitalWrite(red, HIGH);
-    while(checkLevel() == 1); //checks if water level is still too low
+    while(checkLevel() == 1){//checks if water level is still too low
+      toggleVent();
+    }
     digitalWrite(red, LOW);
-    if(temp < tempRange){
+    if(temperature < tempRange){
       Serial.println("Idle");
       lcd.setCursor(0, 0);
       lcd.print("Idle            ");
@@ -195,19 +298,16 @@ void errorState(){
   }
 }
 void runningState(){
-  if(temp >= tempRange){
+  if(temperature >= tempRange){
     Serial.println("Running");
     lcd.setCursor(0, 0);
     lcd.print("Running         ");
     displayTime();
     digitalWrite(green, LOW);
     digitalWrite(blue, HIGH);
-    while(temp >= tempRange){
+    while(temperature >= tempRange){
       digitalWrite(blue, HIGH);
-      if(Serial.available()> 0){
-        temp = Serial.read();
-      }
-      if( measure_environment( &temperature, &humidity ) == true ){
+      if( checkTemp( &temperature, &humidity ) == true ){
         Serial.print( "T = " );
         Serial.print( temperature, 1 );
         Serial.print( " deg. C, H = " );
@@ -216,9 +316,9 @@ void runningState(){
         lcd.setCursor(0, 0);
         lcd.print("Temp=           ");
         lcd.setCursor(5, 0);
-        lcd.print(temperature);
+        lcd.print((temperature * 9/5)+32);
         lcd.setCursor(7, 0);
-        lcd.print("C       ");
+        lcd.print("F       ");
         lcd.setCursor(9, 0);
         lcd.print("Hum=  ");
         lcd.setCursor(13, 0);
@@ -226,22 +326,11 @@ void runningState(){
         lcd.setCursor(15, 0);
         lcd.print("%");
       }
+      toggleFan();
+      toggleVent();
       disabledState();
       idleState();
       errorState();
     }
   }
-}
-static bool measure_environment( float *temperature, float *humidity )
-{
-  static unsigned long measurement_timestamp = millis( );
-  /* Checks for new reading every 3 seconds. */
-  if( millis( ) - measurement_timestamp > 3000ul ){
-    if( dht_sensor.measure( temperature, humidity ) == true )
-    {
-      measurement_timestamp = millis( );
-      return( true );
-    }
-  }
-  return( false );
 }
