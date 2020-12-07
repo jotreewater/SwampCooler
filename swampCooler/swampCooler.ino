@@ -33,7 +33,7 @@ int ventCloseButton = 26;
 int DHTSensorPin = 28;
 float temperature;
 float humidity;
-int tempRange = 50;
+int tempRange = 59;
 
 //LED Variables
 int idleLEDPower = 29; //10000000
@@ -70,6 +70,7 @@ void setup() {
   //Port C pins
   *ddrC |= 11111000; //Set 7654 to output
   *portC |= 11000000;
+  *pinC |= 00000100; //ErrorLEDPower high
   //Disable Pins
   pinMode(disableOnButton, INPUT_PULLUP);  
   pinMode(disableOffButton, INPUT_PULLUP);
@@ -94,13 +95,12 @@ void setup() {
 }
 
 void loop() {
-  Serial.println("loop");
-  disableState();
-  idleState();
   toggleVent();
+  disableState();
+  errorState();
+  idleState();
   runningState();
   checkTemp();
-  errorState();
 }
 void disableState(){
   //Checks if disable on button was pressed
@@ -110,6 +110,7 @@ void disableState(){
     *pinC &= 10000000; //RunningLEDPower low
     *pinC &= 01000000; //ErrorLEDPower low
     digitalWrite(fanPowerPin, LOW);
+    digitalWrite(fanForwardPin, LOW);
     *pinA |= 00000001; //DisableLEDPower high
     //Stalls returning until disable off button is pressed
     while(digitalRead(disableOffButton) == HIGH){
@@ -154,6 +155,7 @@ void idleState(){
     lcd.print("%");
   }
   digitalWrite(fanPowerPin, LOW);
+  digitalWrite(fanForwardPin, LOW);
   *pinA &= 00000001; //DisableLEDPower low
   *pinC &= 10000000; //RunningLEDPower low
   *pinC &= 00000100; //ErrorLEDPower low
@@ -185,7 +187,7 @@ void runningState(){
     *pinA &= 00000001; //DisableLEDPower low
     *pinA &= 10000000; //IdleLEDPower low
     *pinC &= 00000100; //ErrorLEDPower low
-    *pinC |= 10000000; //RunningLEDPower low
+    *pinC |= 10000000; //RunningLEDPower high
     digitalWrite(fanPowerPin, HIGH);
     digitalWrite(fanForwardPin, HIGH);
   }
@@ -195,10 +197,12 @@ void errorState(){
   level = analogRead(levelSensorPin);
   if(level < 200){
     digitalWrite(fanPowerPin, LOW);
+    digitalWrite(fanForwardPin, LOW);
+    *pinA &= 00000001; //DisableLEDPower low
     *pinA &= 10000000; //IdleLEDPower low
     *pinC &= 10000000; //RunningLEDPower low
-    *pinC |= 00000100; //ErrorLEDPower low
-    while(level > 200){
+    *pinC |= 00000100; //ErrorLEDPower high
+    while(level < 200){
       level = analogRead(levelSensorPin);
       static unsigned long timerStart = millis();
       //Once every four seconds
